@@ -1,0 +1,220 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for application infrastructure (EC2, ASG, RDS, ALB, AMI-Server)
+
+Parameters:
+  VPCId:
+    Type: String
+    Description: ID of the VPC (from networking template)
+  PublicSubnet1Id:
+    Type: String
+    Description: ID of Public Subnet 1 (from networking template)
+  PublicSubnet2Id:
+    Type: String
+    Description: ID of Public Subnet 2 (from networking template)
+  PrivateSubnet1Id:
+    Type: String
+    Description: ID of Private Subnet 1 (from networking template)
+  PrivateSubnet2Id:
+    Type: String
+    Description: ID of Private Subnet 2 (from networking template)
+  ALBSecurityGroupId:
+    Type: String
+    Description: ID of the ALB Security Group (from networking template)
+  WebServerSecurityGroupId:
+    Type: String
+    Description: ID of the Web Server Security Group (from networking template)
+  RDSSecurityGroupId:
+    Type: String
+    Description: ID of the RDS Security Group (from networking template)
+  WordPressAMIId:
+    Type: String
+    Description: ID of the WordPress AMI (from Task 5)
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of the key pair for EC2 instances
+
+Resources:
+  # RDS Subnet Group
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Name
+          Value: CM-WP-RDS-SubnetGroup
+
+  # RDS Instance
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: CM-WP-RDS
+      Engine: mysql
+      EngineVersion: 8.0.35
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      DBName: CM_WP_RDS
+      MasterUsername: admin
+      MasterUserPassword: CloudFormat123*
+      MultiAZ: true
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroupId
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      Tags:
+        - Key: Name
+          Value: CM-WP-RDS
+
+  # AMI-Server (Standalone EC2 Instance in Public Subnet 2)
+  AMIServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref WordPressAMIId
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet2Id
+      SecurityGroupIds:
+        - !Ref WebServerSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: CM-WP-AMIServer
+
+  # Application Load Balancer
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: wordpress-alb-cf
+      Subnets:
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
+      SecurityGroups:
+        - !Ref ALBSecurityGroupId
+      Tags:
+        - Key: Name
+          Value: CM-WP-ALB
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # Target Group
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: wordpress-target-group-cf
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPCId
+      HealthCheckPath: /
+      TargetType: instance
+      Tags:
+        - Key: Name
+          Value: CM-WP-TargetGroup
+
+  # Launch Template
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: WordPress-Launch-Template-CF
+      LaunchTemplateData:
+        InstanceType: t2.micro
+        KeyName: !Ref KeyName
+        ImageId: !Ref WordPressAMIId
+        SecurityGroupIds:
+          - !Ref WebServerSecurityGroupId
+
+  # Auto Scaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: CM-WP-ASG
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: '1'
+      MaxSize: '3'
+      DesiredCapacity: '1'
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      TargetGroupARNs:
+        - !Ref TargetGroup
+      Tags:
+        - Key: Name
+          Value: CM-WP-ASG
+          PropagateAtLaunch: true
+
+  # Scale-Out Policy
+  ScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: 1
+      Cooldown: 300
+
+  # Scale-In Policy
+  ScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: -1
+      Cooldown: 300
+
+  # CloudWatch Alarms for Scaling
+  ScaleOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale out when CPU utilization > 70%
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref ScaleOutPolicy
+
+  ScaleInAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale in when CPU utilization < 25%
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 25
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref ScaleInPolicy
+
+Outputs:
+  ALBDNSName:
+    Description: DNS name of the ALB
+    Value: !GetAtt ALB.DNSName
+  RDSEndpoint:
+    Description: Endpoint of the RDS instance
+    Value: !GetAtt RDSInstance.Endpoint.Address
+  AMIServerPublicIP:
+    Description: Public IP of the AMI-Server
+    Value: !GetAtt AMIServer.PublicIp

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopping Website</title>
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+    <header>
+        <h1>My Shopping Website</h1>
+        <div id="auth-section">
+            <span id="user-status">Not logged in</span>
+            <button id="login-btn" onclick="showLogin()">Login</button>
+            <button id="logout-btn" style="display:none;" onclick="logout()">Logout</button>
+        </div>
+    </header>
+    <main>
+        <div id="login-form" style="display:none;">
+            <h2>Login</h2>
+            <input type="text" id="username" placeholder="Username" required>
+            <input type="password" id="password" placeholder="Password" required>
+            <button onclick="login()">Submit</button>
+            <p id="login-error" style="color:red;"></p>
+        </div>
+        <section id="products">
+            <h2>Products</h2>
+            <div class="product-grid">
+                <div class="product">
+                    <h3>Book</h3>
+                    <p>Price: $10</p>
+                    <button onclick="addToCart('book1', 'Book', 10)">Add to Cart</button>
+                </div>
+                <div class="product">
+                    <h3>Headphones</h3>
+                    <p>Price: $50</p>
+                    <button onclick="addToCart('headphones1', 'Headphones', 50)">Add to Cart</button>
+                </div>
+                <div class="product">
+                    <h3>Laptop</h3>
+                    <p>Price: $500</p>
+                    <button onclick="addToCart('laptop1', 'Laptop', 500)">Add to Cart</button>
+                </div>
+            </div>
+        </section>
+        <section id="cart">
+            <h2>Your Cart</h2>
+            <p id="cart-status">Cart is empty</p>
+            <ul id="cart-items"></ul>
+        </section>
+    </main>
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.809.0.min.js"></script>
+    <script src="js/script.js"></script>
+</body>
+</html>

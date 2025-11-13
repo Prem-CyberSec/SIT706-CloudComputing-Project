@@ -1,0 +1,307 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template for WordPress application infrastructure (EC2, ASG, RDS, ALB, S3)
+
+Parameters:
+  VPCId:
+    Type: String
+    Description: ID of the VPC
+  PublicSubnet1Id:
+    Type: String
+    Description: ID of Public Subnet 1
+  PublicSubnet2Id:
+    Type: String
+    Description: ID of Public Subnet 2
+  PrivateSubnet1Id:
+    Type: String
+    Description: ID of Private Subnet 1
+  PrivateSubnet2Id:
+    Type: String
+    Description: ID of Private Subnet 2
+  AMIID:
+    Type: String
+    Description: ID of the WordPress AMI
+  KeyPairName:
+    Type: String
+    Description: Name of the EC2 Key Pair for AMI Server
+  KeyPairName2:
+    Type: String
+    Description: Name of the EC2 Key Pair for Launch Template
+    
+
+Resources:
+  # RDS Security Group
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for RDS
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref AMIServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: CM-WP-RDS-SecurityGroup
+
+  # RDS Subnet Group
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Name
+          Value: CM-WP-RDS-SubnetGroup
+
+  # RDS Instance
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: 8.0.35
+      AllocatedStorage: 20
+      MasterUsername: admin
+      MasterUserPassword: CloudFormat123*
+      DBInstanceIdentifier: CM-WP-RDS
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      DBName: CM_WP_RDS
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      MultiAZ: true
+      Tags:
+        - Key: Name
+          Value: CM-WP-RDS
+
+  # RDS Read Replica
+  RDSReadReplica:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      EngineVersion: 8.0.35
+      SourceDBInstanceIdentifier: !Ref RDSInstance
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      Tags:
+        - Key: Name
+          Value: CM-WP-RDS-ReadReplica
+
+  # Application Load Balancer
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet1Id
+        - !Ref PublicSubnet2Id
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: CM-WP-ALB
+  
+  # ALB Security Group
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: ALBSecurityGroup
+
+  # ALB Target Group
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPCId
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      Tags:
+        - Key: Name
+          Value: CM-WP-TargetGroup
+
+  # ALB Listener
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # S3 Bucket
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub cm-wp-media-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Name
+          Value: CM-WP-MediaBucket
+
+  # AMI Server Security Group
+  AMIServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for AMI Server
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: CM-WP-AMIServer-SecurityGroup
+
+  # AMI-Server        
+  AMIServer:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref AMIID
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref PublicSubnet2Id
+      SecurityGroupIds:
+        - !Ref AMIServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: CM-WP-AMIServer
+
+
+  # Web Server Security Group
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for AMI Server
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: CM-WP-WebServer-SecurityGroup
+
+  # Launch Template
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref AMIID
+        InstanceType: t2.micro
+        KeyName: !Ref KeyPairName2
+        SecurityGroupIds:
+          - !Ref WebServerSecurityGroup
+
+  # Auto Scaling Group
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: '1'
+      MaxSize: '3'
+      DesiredCapacity: '1'
+      TargetGroupARNs:
+        - !Ref ALBTargetGroup
+      Tags:
+        - Key: Name
+          Value: CM-WP-ASG
+          PropagateAtLaunch: true
+
+  # Scaling Policies
+  ScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: 1
+      Cooldown: 300
+
+  ScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: SimpleScaling
+      AdjustmentType: ChangeInCapacity
+      ScalingAdjustment: -1
+      Cooldown: 300
+
+  # CloudWatch Alarms for Scaling
+  ScaleOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale out when CPU utilization > 70%
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref ScaleOutPolicy
+
+  ScaleInAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Scale in when CPU utilization < 25%
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 25
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroup
+      AlarmActions:
+        - !Ref ScaleInPolicy
+
+Outputs:
+  ALBDNSName:
+    Description: DNS Name of the ALB
+    Value: !GetAtt ALB.DNSName
+  S3BucketName:
+    Description: Name of the S3 Bucket
+    Value: !Ref S3Bucket
+  RDSEndpoint:
+    Description: RDS Endpoint
+    Value: !GetAtt RDSInstance.Endpoint.Address
